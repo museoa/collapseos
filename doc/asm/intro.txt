@@ -1,0 +1,306 @@
+# Assembling binaries
+
+Collapse OS features many assemblers. Each of them have their
+specificities, but they are very similar in the way they work.
+
+This page describes common behavior. Some assemblers stray from
+it. Refer to arch-specific documentation for details.
+
+# Initial setup
+
+After you've loaded the assembler (for example, with "5 LOAD"
+in the case of the Z80 assembler), you have to set it up before
+spitting opcodes. More specifically, you might have to set
+ORG and BIN( variables.
+
+ORG, defaulting to 0, specifies where the binary begins in
+memory. It allows the PC word to return the proper value.
+Generally, when you're ready to spit upcodes, you run "H@ ORG !"
+so that PC is set to 0.
+
+BIN(, defaulting to 0, specifies where the resulting binary
+lives in memory. If all you spit are relative jumps, it doesn't
+matter, but if you need to jump to an absolute address, BIN(
+needs to be correct. Note that ;CODE spits an absolute jump, so
+BIN( very often needs to be correct.
+
+# Usage
+
+To spit binary code, use opcode words such as "LDrr," in the
+Z80 assembler which spits LD in its "r1, r2" form. Unlike
+typical assemblers, operation arguments go before the opcode
+word, not after it. Therefore, the "LD A, B" you would write in
+a regular assembler becomes "A B LDrr,"
+
+Those opcode words, of which there is a complete list in each
+arch-specific documentation, end with "," to indicate that their
+effect is to write (,) the corresponding opcode.
+
+The "argtype" suffix after each mnemonic is needed because the
+assembler doesn't auto-detect the op's form based on arguments.
+It has to be explicitly specified.
+
+Although efforts are made to keep those argtypes consistent
+across arches, there are differences. Arch-specific doc has
+precise definitions for those argtypes.
+
+For example, in Z80 asm, "r" is for 8-bit registers, "d" for
+16-bit ones, "i" for immediate, "c" is for conditions.
+
+# Ad-hoc assembly
+
+A frequent usage of the assembler is to cross-assemble a new
+Collapse OS binary. However, it can also be used to assemble
+code for immediate usage on the machine that assemble.
+
+A frequent mistake when doing so is to forget to set BIN( and
+ORG. BIN( must match your system's binary offset (you get get
+it with "0 BIN+") even for the most simple of code because
+otherwise, ";CODE" will jump to the wrong offset.
+
+ORG is less critical, but can lead to problems if not set, so
+you should take the habit of setting it with "H@ ORG !".
+
+# Labels and flow
+
+Labels are a convenient way of managing relative jump
+calculations. Backward labels are easy. It is only a matter or
+recording "HERE" and do subtractions. Forward labels record the
+place where we should write the offset, and then when we get to
+that point later on, the label records the offset there.
+
+To avoid using dict memory in compilation targets, we
+pre-declare label variables here, which means we have a limited
+number of it. We have 4: L1, L2, L3, L4.
+
+There are 2 label types: backward and forward. For each type,
+there are two actions: set and write. Setting a label is
+declaring where it is. Words for this are BSET and FSET. It has
+to be performed at the label's destination. Writing a label is
+writing its offset difference to the binary result. It has to be
+done right after a relative jump operation. Word for this are
+BWR and FWR. Yes, those words are only for relative jumps.
+
+For backward labels, set happens before write. For forward
+labels, write happen before set. The write operation writes a
+dummy placeholder, and then the set operation writes the offset
+at that placeholder's address.
+
+Important limitation: Flow words are broken when PC reaches
+0x8000. The BREAK, word relies on that 15th bit as a flag.
+
+Variable actions are expected to be called with labels in
+front of them. Z80 examples:
+
+L1 BSET NOP, JR, L1 BWR ( backward jump )
+JR, L1 FWR NOP, L1 FSET ( forward jump )
+
+Can you use labels with JP, and CALL,? Yes, but only backwards
+jumps, and in that case, you use the label's value directly.
+Example: L2 @ CALL,
+
+# Structured flow
+
+Collapse OS assemblers have words that behave similarly to
+IF..THEN and BEGIN..UNTIL. Those words use forward and backward
+jump mechanism desribed above, but use the parameter stack to
+hold PC values instead of using label variables.
+
+Unlike Forth's IF, the condition for the jump doesn't come from
+PS, but comes from CPU flags. For example, in Z80, "IFZ," will
+jump to "THEN," if Z is not set.
+
+There can be an ELSE, in the middle of an IF, and THEN,. When
+present, IF, jumps to it when the condition is unmet. When the
+condition is met, upon reaching the ELSE, we unconditionally
+jump to the THEN,.
+
+On the BEGIN,..AGAIN, side, it's a bit different. You start
+with your BEGIN, instruction, and then later you issue a
+jump instruction followed by AGAIN,. Exactly like you would do
+with a label.
+
+On top of that, you have the very nice BREAK, instruction,
+which must also be preceded by a jump and will jump to the
+PC following the next AGAIN,. Z80 examples:
+
+IFZ, NOP, ELSE, NOP, THEN,
+BEGIN, NOP, JR, AGAIN, ( unconditional )
+BEGIN, NOP, JRZ, AGAIN, ( conditional )
+BEGIN, NOP, JRZ, BREAK, JR, AGAIN, ( break off the loop )
+
+# Z80 Instructions list
+
+Letters in [] brackets indicate "argtype" variants. When the
+bracket starts with ",", it means that a "plain" mnemonic is
+available. For example, "RET," and "RETc," exist.
+
+Note that assemblers in Collapse OS are incomplete and opcode
+words were implemented in a "just-in-time" fashion, when needed.
+
+r => A B C D E H L (HL)
+d => BC DE HL AF/SP
+c => CNZ CZ CNC CC CPO CPE CP CM
+
+LD  [rr, ri, di, (i)HL, HL(i), d(i), (i)d, rIXY, IXYr,
+    (DE)A, A(DE), (i)A, A(i)]
+ADD [r, i, HLd, IXd, IXIX, IYd, IYIY]
+ADC [r, HLd]
+CP  [r, i, (IXY+)]
+SBC [r, HLd]
+SUB [r, i]
+INC [r, d, (IXY+)]
+DEC [r, d, (IXY+)]
+AND [r, i]
+OR  [r, i]
+XOR [r, i]
+OUT [iA, (C)r]
+IN  [Ai, r(C)]
+JP  [i, (HL), (IX), (IY)]
+JR  [, Z, NZ, C, NC]
+
+PUSH       POP
+SET        RES         BIT
+RL         RLC         SLA         RLA         RLCA
+RR         RRC         SRL         RRA         RRCA
+CALL       RST         DJNZ
+DI         EI          EXDEHL      EXX         HALT
+NOP        RET [,c]    RETI        RETN        SCF
+
+Macros:
+
+SUBHLd     PUSH [0,1,Z,A]          HLZ         DEZ
+LDDE(HL)   OUT [HL,DE]
+
+# 8086 assembler
+
+Load with "30 LOAD". As with the Z80 assembler, it is incom-
+plete.
+
+Mnemonics are followed by argument types. For example, MOVri,
+moves 8-bit immediate to 8-bit register.
+
+'r' = 8-bit register           'x' = 16-bit register
+'i' = 8-bit immediate          'I' = 16-bit immediate
+'s' = SREG register
+
+Mnemonics that only have one signature (for example INT,) don't
+have operands letters.
+
+For jumps, it's special. 's' is SHORT, 'n' is NEAR, 'f' is FAR.
+
+# 8086 Instructions list
+
+r -> AL BL CL DL AH BH CH DX
+x -> AX BX CX DX SP BP SI DI
+s -> ES CS SS DS
+[] -> [SI] [DI] [BP] [BX] [BX+SI] [BX+DI] [BP+SI] [BP+DI]
+
+RET   CLI   STI   HLT   CLD   STD   NOP   CBW   REPZ  REPNZ
+LODSB LODSW CMPSB SMPSW MOVSB MOVSW SCASB SCASW STOSB STOSW
+
+CALL  J[Z,NZ,C,NC] JMP[s,n,r,f]
+
+INC[r,x,[w],[b],[w]+,[b]+]
+DEC[r,x,[w],[b],[w]+,[b]+]
+POP[x,[w],[w]+]
+PUSH[x,[w],[w]+,s]
+MUL[r,x]
+DIV[r,x]
+XOR[rr,xx]
+OR[rr,xx]
+AND[rr,xx,ALi,AXI]
+ADD[rr,xx,ALi,AXI,xi]
+SUB[rr,xx,ALi,AXI,xi]
+INT
+
+CMP[rr,xx,r[],x[],r[]+,x[]+]
+MOV[rr,xx,r[],x[],[]r,[]x,r[]+,x[]+,[]+r,[]+x,ri,xI,sx,rm,xm
+    mr,mx]
+
+("1" means "shift by 1", "CL" means "shift by CL")
+ROL[r1,x1,rCL,xCL]
+ROR[r1,x1,rCL,xCL]
+SHL[r1,x1,rCL,xCL]
+SHR[r1,x1,rCL,xCL]
+
+# AVR assembler
+
+Load with "50 LOAD". As with the Z80 assembler, it is incom-
+plete.
+
+All mnemonics in AVR have a single signature. Therefore, we
+don't need any "argtype" suffixes.
+
+Registers are referred to with consts R0-R31. There is
+X, Y, Z, X+, Y+, Z+, X-, Y-, Z- for appropriate ops (LD, ST).
+XL, XH, YL, YH, ZL, ZH are simple aliases to R26-R31.
+
+Branching works differently. Instead of expecting a byte to be
+written after the naked op, branching words expect a displace-
+ment argument.
+
+This is because there's bitwise ORing involved in the creation  
+of the final opcode, which makes z80a's approach impractical.
+
+This makes labelling a bit different too. Instead of expecting  
+label words after the naked branching op, we rather have label
+words expecting branching wordref as an argument. Examples:
+
+L2 ' BRTS FLBL! ( branch forward to L2 )
+L1 ' RJMP LBL, ( branch backward to L1 )
+
+# Model-specific constants
+
+Model-specific constants must be loaded separately. Here is a
+list of units:
+
+- ATMega328P: B65-B66
+
+Those units contain register constants such as PORTB, DDRB, etc.
+Unlike many moder assemblers, they do not include bit constants.
+Here's an example use:
+
+DDRB 5 SBI,
+PORTB 5 CBI,
+R16 TIFR0 IN,
+R16 0 ( TOV0 ) SBRS,
+
+# AVR instructions list
+
+OPRd (B53)
+ASR  COM   DEC   INC   LAC   LAS   LAT   LSR   NEG   POP   PUSH
+ROR  SWAP  XCH
+
+OPRdRr (B54)
+ADC  ADD   AND   CP    CPC   CPSE  EOR   MOV   MUL   OR   SBC
+SUB
+
+OPRdA (B54)
+IN   OUT
+
+OPRdK (B55)
+ANDI CPI   LDI   ORI   SBCI   SBR   SUBI
+
+OPAb (B55)
+CBI   SBI   SBIC  SBIS
+
+OPNA (B56)
+BREAK  CL[C,H,I,N,S,T,V,Z] SE[C,H,I,N,S,T,V,Z] EIJMP ICALL
+EICALL IJMP  NOP   RET   RETI  SLEEP WDR
+
+OPb (B57)
+BCLR  BSET
+
+OPRdb (B57)
+BLD   BST   SBRC  SBRS
+
+Special (B57,B60)
+CLR   TST   LSL   LD    ST
+
+Flow (B58)
+RJMP  RCALL
+BR[BC,BS,CC,CS,EQ,NE,GE,HC,HS,ID,IE,LO,LT,MI,PL,SH,TC,TS,VC,VS]
+
+Flow macros (B61)
+LBL! LBL, SKIP, TO, FLBL, FLBL! BEGIN, AGAIN? AGAIN, IF, THEN,
